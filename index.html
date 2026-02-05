@@ -1,0 +1,491 @@
+<!DOCTYPE html>
+<html lang="en" class="bg-gray-50">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Vendor Reconciliation • Statement of Differences</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script type="module">
+    import * as pdfjs from 'https://cdn.jsdelivr.net/npm/pdfjs-dist@5.4.624/+esm';
+    window.pdfjsLib = pdfjs;
+    pdfjs.GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@5.4.624/build/pdf.worker.min.mjs';
+  </script>
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+  <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/fuse.js@7.0.0/dist/fuse.min.js"></script>
+
+  <style>
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
+    .status-box { min-height: 160px; }
+    .spinner { border: 5px solid #e5e7eb; border-top-color: #6366f1; border-radius: 50%; width: 48px; height: 48px; animation: spin 1s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    pre { white-space: pre-wrap; font-size: 0.875rem; line-height: 1.4; }
+  </style>
+</head>
+<body class="min-h-screen">
+
+<header class="bg-indigo-800 text-white py-5 shadow">
+  <div class="max-w-7xl mx-auto px-6 flex justify-between items-center">
+    <h1 class="text-2xl font-bold">Vendor Reconciliation Tool</h1>
+    <div class="text-sm opacity-90">Statement of Differences • Browser-only</div>
+  </div>
+</header>
+
+<main class="max-w-7xl mx-auto px-6 py-8">
+
+  <div class="flex border-b mb-8">
+    <button data-tab="upload" class="tab-btn px-6 py-3 font-medium border-b-4 border-transparent hover:border-indigo-600 active:border-indigo-600 text-indigo-700 border-indigo-600">1. Upload</button>
+    <button data-tab="preview" class="tab-btn px-6 py-3 font-medium border-b-4 border-transparent hover:border-indigo-600">2. Preview + Raw</button>
+    <button data-tab="recon" class="tab-btn px-6 py-3 font-medium border-b-4 border-transparent hover:border-indigo-600">3. Reconciliation</button>
+  </div>
+
+  <!-- ──── UPLOAD ─────────────────────────────────────── -->
+  <div id="upload" class="tab-content active">
+    <div class="bg-white rounded-xl shadow-lg p-8">
+      <h2 class="text-2xl font-bold mb-6">Upload Statements</h2>
+      <div class="grid md:grid-cols-2 gap-10">
+        <div>
+          <label class="block text-lg font-semibold mb-3">Company Books (AP Ledger)</label>
+          <div id="company-drop" class="border-4 border-dashed border-gray-400 rounded-xl p-12 text-center cursor-pointer hover:border-indigo-600 hover:bg-indigo-50 transition">
+            <p class="text-gray-600">PDF • Image • Excel • CSV</p>
+            <input type="file" id="company-file" multiple accept=".pdf,.jpg,.png,.xlsx,.xls,.csv" class="hidden"/>
+          </div>
+          <div id="company-files" class="mt-4 space-y-2 text-sm"></div>
+        </div>
+        <div>
+          <label class="block text-lg font-semibold mb-3">Vendor Statement</label>
+          <div id="vendor-drop" class="border-4 border-dashed border-gray-400 rounded-xl p-12 text-center cursor-pointer hover:border-indigo-600 hover:bg-indigo-50 transition">
+            <p class="text-gray-600">PDF • Image • Excel • CSV</p>
+            <input type="file" id="vendor-file" multiple accept=".pdf,.jpg,.png,.xlsx,.xls,.csv" class="hidden"/>
+          </div>
+          <div id="vendor-files" class="mt-4 space-y-2 text-sm"></div>
+        </div>
+      </div>
+
+      <div class="mt-12 text-center">
+        <button id="process-btn" class="bg-indigo-700 hover:bg-indigo-800 text-white px-12 py-4 rounded-xl font-bold text-lg disabled:opacity-50 disabled:cursor-not-allowed" disabled>
+          Extract & Prepare
+        </button>
+      </div>
+
+      <div id="status-area" class="mt-10 bg-gray-50 border rounded-xl p-6 hidden">
+        <div class="flex items-center gap-4">
+          <div class="spinner"></div>
+          <p id="status-main" class="font-semibold text-lg text-gray-800">Initializing...</p>
+        </div>
+        <p id="status-sub" class="mt-3 text-gray-700"></p>
+        <p id="status-advice" class="mt-4 text-amber-800 italic text-sm"></p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ──── PREVIEW + RAW ──────────────────────────────── -->
+  <div id="preview" class="tab-content">
+    <h2 class="text-2xl font-bold mb-6">Extracted Transactions + Raw Text</h2>
+    <div class="grid lg:grid-cols-2 gap-8">
+      <div class="bg-white rounded-xl shadow p-6">
+        <h3 class="text-xl font-semibold mb-4">Company Side</h3>
+        <div id="company-parsed" class="max-h-96 overflow-auto border rounded"></div>
+        <details class="mt-4">
+          <summary class="cursor-pointer text-indigo-700 font-medium">Raw extracted text</summary>
+          <pre id="company-raw" class="bg-gray-100 p-4 rounded mt-2 overflow-auto max-h-64 text-sm"></pre>
+        </details>
+      </div>
+      <div class="bg-white rounded-xl shadow p-6">
+        <h3 class="text-xl font-semibold mb-4">Vendor Side</h3>
+        <div id="vendor-parsed" class="max-h-96 overflow-auto border rounded"></div>
+        <details class="mt-4">
+          <summary class="cursor-pointer text-indigo-700 font-medium">Raw extracted text</summary>
+          <pre id="vendor-raw" class="bg-gray-100 p-4 rounded mt-2 overflow-auto max-h-64 text-sm"></pre>
+        </details>
+      </div>
+    </div>
+  </div>
+
+  <!-- ──── RECONCILIATION ─────────────────────────────── -->
+  <div id="recon" class="tab-content">
+    <h2 class="text-2xl font-bold mb-6">Reconciliation & Statement of Differences</h2>
+    <div class="bg-white rounded-xl shadow p-8">
+      <div class="grid md:grid-cols-3 gap-6 mb-10">
+        <div>
+          <label class="block text-sm font-medium mb-2">Amount tolerance (₹)</label>
+          <input id="amt-tol" type="number" value="50" min="0" class="w-full border rounded px-4 py-2"/>
+        </div>
+        <div>
+          <label class="block text-sm font-medium mb-2">Date tolerance (± days)</label>
+          <input id="date-tol" type="number" value="10" min="0" class="w-full border rounded px-4 py-2"/>
+        </div>
+        <div>
+          <label class="block text-sm font-medium mb-2">Min match score</label>
+          <input id="min-score" type="range" min="60" max="95" value="78" step="1" class="w-full mt-2"/>
+          <div id="score-val" class="text-center mt-1 text-sm font-medium">78%</div>
+        </div>
+      </div>
+
+      <button id="run-btn" class="bg-green-600 hover:bg-green-700 text-white px-10 py-4 rounded-xl font-bold text-lg">
+        Generate Reconciliation
+      </button>
+
+      <div id="recon-output" class="mt-10"></div>
+    </div>
+  </div>
+
+</main>
+
+<script type="module">
+// ──────────────────────────────────────────────── Globals
+let companyTx = [];
+let vendorTx  = [];
+let companyRaw = '';
+let vendorRaw  = '';
+
+const tabs = document.querySelectorAll('.tab-btn');
+tabs.forEach(btn => {
+  btn.onclick = () => {
+    tabs.forEach(b => b.classList.remove('border-indigo-600','text-indigo-700'));
+    btn.classList.add('border-indigo-600','text-indigo-700');
+    document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+    document.getElementById(btn.dataset.tab).classList.add('active');
+  };
+});
+
+// Drag & drop setup
+['company','vendor'].forEach(s => {
+  const drop = document.getElementById(s+'-drop');
+  const file = document.getElementById(s+'-file');
+  const list = document.getElementById(s+'-files');
+
+  drop.onclick = () => file.click();
+  file.onchange = e => showFiles(e.target.files, list);
+  drop.ondragover = e => { e.preventDefault(); drop.classList.add('border-indigo-600','bg-indigo-50'); };
+  drop.ondrop = e => { e.preventDefault(); drop.classList.remove('border-indigo-600','bg-indigo-50'); showFiles(e.dataTransfer.files, list); };
+});
+
+function showFiles(files, container) {
+  container.innerHTML = '';
+  [...files].forEach(f => {
+    const d = document.createElement('div');
+    d.className = 'bg-gray-100 px-4 py-2 rounded flex justify-between text-sm';
+    d.innerHTML = `<span>${f.name}</span><span class="text-gray-500">${(f.size/1024).toFixed(1)} KB</span>`;
+    container.appendChild(d);
+  });
+  document.getElementById('process-btn').disabled = !(
+    document.getElementById('company-files').children.length > 0 &&
+    document.getElementById('vendor-files').children.length > 0
+  );
+}
+
+// Process
+document.getElementById('process-btn').onclick = async () => {
+  const area = document.getElementById('status-area');
+  area.classList.remove('hidden');
+  document.getElementById('status-main').textContent = 'Extracting...';
+
+  try {
+    [companyTx, companyRaw] = await processSide('company');
+    [vendorTx,  vendorRaw]  = await processSide('vendor');
+
+    document.getElementById('status-main').textContent = 'Extraction finished';
+    document.getElementById('status-sub').textContent = `${companyTx.length} company • ${vendorTx.length} vendor items`;
+
+    renderPreview('company', companyTx, companyRaw);
+    renderPreview('vendor', vendorTx, vendorRaw);
+
+  } catch (err) {
+    document.getElementById('status-main').textContent = 'Error';
+    document.getElementById('status-sub').innerHTML = `<span class="text-red-600">${err.message}</span>`;
+    console.error(err);
+  }
+};
+
+async function processSide(side) {
+  const files = document.getElementById(side + '-file').files;
+  let raw = '';
+  let txs = [];
+
+  for (let file of files) {
+    let text = '';
+
+    if (file.type === 'application/pdf') {
+      text = await extractPDF(file);
+    } else if (file.type.startsWith('image/')) {
+      text = await ocrImage(file);
+    } else {
+      text = await file.text();
+    }
+
+    raw += `===== ${file.name} =====\n${text}\n\n`;
+    txs.push(...parseTransactions(text, side));
+  }
+
+  return [txs, raw];
+}
+
+async function extractPDF(file) {
+  const buf = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({data: buf}).promise;
+  let txt = '';
+  for (let i = 1; i <= pdf.numPages; i++) {
+    const page = await pdf.getPage(i);
+    const c = await page.getTextContent();
+    txt += c.items.map(it => it.str).join(' ') + '\n';
+  }
+  return txt;
+}
+
+async function ocrImage(file) {
+  const url = URL.createObjectURL(file);
+  const { data: { text } } = await Tesseract.recognize(url, 'eng');
+  URL.revokeObjectURL(url);
+  return text;
+}
+
+function parseTransactions(text, side) {
+  const lines = text.split('\n').map(l => l.trim()).filter(l => l.length > 5);
+  const tx = [];
+
+  const dateRe = /\d{1,2}[-/ ][A-Za-z]{3}[-/ ]?\d{2,4}|\d{1,2}[-/]\d{1,2}[-/]\d{2,4}/;
+  const amtRe  = /[\(₹-]?\d{1,3}(?:,\d{3})*(?:\.\d{1,2})?[\)]?/g;
+  const refRe  = /(?:INV|CN|DN|PUR|PAY|PS\/|Ref|#|No\.?|CN#|DN#)\s*[\w\/\-]+/i;
+
+  lines.forEach(line => {
+    if (!line.match(dateRe)) return;
+
+    const dateStr = (line.match(dateRe) || [''])[0];
+    let normDate = '—';
+    try {
+      const parts = dateStr.replace(/[-/ ]/g, '/').split('/');
+      if (parts.length === 3) {
+        let [d,m,y] = parts;
+        if (d.length === 4) [y,d,m] = [d,m,y];
+        normDate = `20${y.length===2?y:'20'+y.slice(2)}-${m.padStart(2,'0')}-${d.padStart(2,'0')}`;
+      }
+    } catch {}
+
+    const amts = (line.match(amtRe) || []).map(s => parseFloat(s.replace(/[^0-9.-]/g,'')) || 0);
+    let debit = 0, credit = 0, net = 0;
+
+    const ref = (line.match(refRe) || [''])[0] || '';
+
+    if (amts.length >= 2) {
+      if (side === 'company') {
+        debit  = amts[amts.length-3] || 0;
+        credit = amts[amts.length-2] || 0;
+      } else {
+        debit  = amts[amts.length-3] || 0;
+        credit = amts[amts.length-2] || 0;
+      }
+      net = debit - credit;
+    } else if (amts.length === 1) {
+      net = amts[0];
+      if (line.includes('(') || line.toLowerCase().includes('credit')) net = -net;
+    }
+
+    const narration = line
+      .replace(dateRe,'')
+      .replace(refRe,'')
+      .replace(amtRe,'')
+      .replace(/\s+/g,' ')
+      .trim();
+
+    tx.push({
+      date: normDate,
+      ref,
+      narration,
+      debit,
+      credit,
+      net,
+      raw: line
+    });
+  });
+
+  return tx;
+}
+
+function renderPreview(side, txs, raw) {
+  const parsed = document.getElementById(side + '-parsed');
+  const rawEl  = document.getElementById(side + '-raw');
+
+  rawEl.textContent = raw;
+
+  if (!txs.length) {
+    parsed.innerHTML = '<div class="p-6 text-gray-500">No items parsed – check raw text</div>';
+    return;
+  }
+
+  let html = `<table class="min-w-full divide-y divide-gray-200">
+    <thead class="bg-gray-100 sticky top-0">
+      <tr>
+        <th class="px-4 py-3 text-left text-xs font-semibold text-gray-600">Date</th>
+        <th class="px-4 py-3 text-left text-xs font-semibold text-gray-600">Ref</th>
+        <th class="px-4 py-3 text-left text-xs font-semibold text-gray-600">Narration</th>
+        <th class="px-4 py-3 text-right text-xs font-semibold text-gray-600">Debit</th>
+        <th class="px-4 py-3 text-right text-xs font-semibold text-gray-600">Credit</th>
+        <th class="px-4 py-3 text-right text-xs font-semibold text-gray-600">Net</th>
+      </tr>
+    </thead>
+    <tbody>`;
+
+  txs.forEach(t => {
+    html += `
+      <tr class="hover:bg-gray-50">
+        <td class="px-4 py-3 whitespace-nowrap text-sm">${t.date}</td>
+        <td class="px-4 py-3 whitespace-nowrap text-sm font-mono">${t.ref || '—'}</td>
+        <td class="px-4 py-3 text-sm">${t.narration.substring(0,70)}${t.narration.length>70?'...':''}</td>
+        <td class="px-4 py-3 text-right text-sm ${t.debit>0?'text-red-600':''}">${t.debit? '₹'+t.debit.toLocaleString('en-IN'):'—'}</td>
+        <td class="px-4 py-3 text-right text-sm ${t.credit>0?'text-green-600':''}">${t.credit? '₹'+t.credit.toLocaleString('en-IN'):'—'}</td>
+        <td class="px-4 py-3 text-right font-medium ${t.net<0?'text-green-700':'text-red-700'}">₹${Math.abs(t.net).toLocaleString('en-IN')}</td>
+      </tr>`;
+  });
+
+  html += '</tbody></table>';
+  parsed.innerHTML = html;
+}
+
+// ──── RECONCILIATION ──────────────────────────────────────
+document.getElementById('run-btn').onclick = () => {
+  const amtTol  = +document.getElementById('amt-tol').value  || 50;
+  const dateTol = +document.getElementById('date-tol').value || 10;
+  const minPct  = +document.getElementById('min-score').value / 100;
+
+  document.getElementById('score-val').textContent = document.getElementById('min-score').value + '%';
+
+  const results = reconcileTransactions(companyTx, vendorTx, amtTol, dateTol, minPct);
+
+  renderStatement(results);
+};
+
+function reconcileTransactions(company, vendor, amtTol, dateTol, minScore) {
+  const fuse = new Fuse(vendor, {
+    keys: ['ref','narration'],
+    threshold: 0.38,
+    includeScore: true
+  });
+
+  const matched = [];
+  const unmatchedC = [];
+  const unmatchedV = [...vendor];
+
+  company.forEach(c => {
+    let best = { score: 0, item: null };
+
+    const search = fuse.search(c.ref || c.narration || '');
+    search.forEach(r => {
+      const v = r.item;
+      let score = (1 - (r.score||1)) * 50;
+
+      const amtDiff = Math.abs(c.net - v.net);
+      if (amtDiff <= amtTol) score += 35;
+      else if (amtDiff <= amtTol * 4) score += 12;
+
+      if (c.date !== '—' && v.date !== '—') {
+        const days = Math.abs(new Date(c.date) - new Date(v.date)) / 86400000;
+        if (days <= dateTol) score += 15;
+        else if (days <= dateTol * 3) score += 5;
+      }
+
+      if (score > best.score) best = { score, item: v };
+    });
+
+    if (best.score >= minScore * 100 && best.item) {
+      matched.push({ c, v: best.item, score: Math.round(best.score) });
+      const idx = unmatchedV.indexOf(best.item);
+      if (idx !== -1) unmatchedV.splice(idx, 1);
+    } else {
+      unmatchedC.push(c);
+    }
+  });
+
+  return { matched, unmatchedC, unmatchedV };
+}
+
+function renderStatement({ matched, unmatchedC, unmatchedV }) {
+  const out = document.getElementById('recon-output');
+  out.innerHTML = '<h3 class="text-2xl font-bold mb-6">Statement of Differences</h3>';
+
+  // Matched
+  if (matched.length) {
+    out.innerHTML += '<div class="mb-10"><h4 class="text-lg font-semibold mb-3 text-green-700">Matched / Reconciled Items</h4>';
+    matched.forEach(m => {
+      out.innerHTML += `
+        <div class="p-5 bg-green-50 border border-green-200 rounded-xl mb-4">
+          <div class="grid md:grid-cols-2 gap-6">
+            <div>
+              <div class="font-semibold">Company</div>
+              <div class="text-sm mt-1">
+                ${m.c.date} • ${m.c.ref || '—'}<br/>
+                ${m.c.narration.substring(0,70)}...<br/>
+                Net: <strong class="${m.c.net<0?'text-green-700':'text-red-700'}">₹${Math.abs(m.c.net).toLocaleString('en-IN')}</strong>
+              </div>
+            </div>
+            <div>
+              <div class="font-semibold">Vendor</div>
+              <div class="text-sm mt-1">
+                ${m.v.date} • ${m.v.ref || '—'}<br/>
+                ${m.v.narration.substring(0,70)}...<br/>
+                Net: <strong class="${m.v.net<0?'text-green-700':'text-red-700'}">₹${Math.abs(m.v.net).toLocaleString('en-IN')}</strong>
+              </div>
+            </div>
+          </div>
+          <div class="mt-3 text-sm text-gray-700">Match confidence: <strong>${m.score}%</strong></div>
+        </div>`;
+    });
+    out.innerHTML += '</div>';
+  }
+
+  // Differences / Unmatched
+  out.innerHTML += '<div class="mb-10"><h4 class="text-lg font-semibold mb-3 text-amber-800">Differences & Unreconciled Items</h4>';
+
+  if (unmatchedC.length === 0 && unmatchedV.length === 0) {
+    out.innerHTML += '<p class="text-green-700 font-medium">No unreconciled differences found.</p>';
+  } else {
+    if (unmatchedC.length) {
+      out.innerHTML += '<p class="font-medium mb-2">Company items not found on Vendor statement:</p>';
+      unmatchedC.forEach(c => {
+        out.innerHTML += `
+          <div class="p-4 bg-amber-50 border border-amber-200 rounded-lg mb-3">
+            ${c.date} • ${c.ref || '—'} • ${c.narration.substring(0,80)}...<br/>
+            <strong class="${c.net<0?'text-green-700':'text-red-700'}">Net: ₹${Math.abs(c.net).toLocaleString('en-IN')}</strong>
+            <div class="text-sm text-amber-800 mt-1">→ Possible missing credit note, payment not acknowledged, or timing difference</div>
+          </div>`;
+      });
+    }
+
+    if (unmatchedV.length) {
+      out.innerHTML += '<p class="font-medium mb-2 mt-6">Vendor items not found on Company books:</p>';
+      unmatchedV.forEach(v => {
+        out.innerHTML += `
+          <div class="p-4 bg-amber-50 border border-amber-200 rounded-lg mb-3">
+            ${v.date} • ${v.ref || '—'} • ${v.narration.substring(0,80)}...<br/>
+            <strong class="${v.net<0?'text-green-700':'text-red-700'}">Net: ₹${Math.abs(v.net).toLocaleString('en-IN')}</strong>
+            <div class="text-sm text-amber-800 mt-1">→ Possible unrecorded invoice, interest charge, or debit note not booked</div>
+          </div>`;
+      });
+    }
+  }
+
+  out.innerHTML += '</div>';
+
+  // Final balance comment (simplified)
+  const companyNet = companyTx.reduce((sum, t) => sum + t.net, 0);
+  const vendorNet  = vendorTx.reduce((sum, t) => sum + t.net, 0);
+  const diff = companyNet - vendorNet;
+
+  out.innerHTML += `
+    <div class="p-6 bg-indigo-50 border border-indigo-200 rounded-xl">
+      <h4 class="text-lg font-semibold mb-3">Final Position Summary</h4>
+      <p>Company closing balance (liability): <strong>₹${Math.abs(companyNet).toLocaleString('en-IN')}</strong></p>
+      <p>Vendor claimed balance (receivable): <strong>₹${Math.abs(vendorNet).toLocaleString('en-IN')}</strong></p>
+      <p class="font-bold mt-3 ${diff === 0 ? 'text-green-700' : 'text-red-700'}">
+        Net difference: ₹${Math.abs(diff).toLocaleString('en-IN')} 
+        ${diff > 0 ? '(Company owes more)' : diff < 0 ? '(Vendor claims more)' : '(Fully reconciled)'}
+      </p>
+      <p class="text-sm text-gray-600 mt-2">Suggested action: Investigate timing differences, unrecorded interest (${vendorNet > companyNet ? '₹'+Math.abs(diff).toLocaleString('en-IN')+' interest/charge' : 'missing credits'}), rounding, or document mismatches.</p>
+    </div>`;
+}
+
+</script>
+<p style="text-align: center; font-size: 0.9em; color: #777; margin-top: 40px;">@ 2026. All rights reserved. Designed and Created by Samar Jeet Jamwal.</p>
+</body>
+</html>
